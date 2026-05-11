@@ -99,6 +99,18 @@ func getTermScrollbackOutput(tabId string, widgetId string, rpcData wshrpc.Comma
 		return nil, err
 	}
 
+	termCount, err := countTerminalsInTab(ctx, tabId)
+	if err != nil {
+		return nil, err
+	}
+	block, err := wstore.DBGet[*waveobj.Block](ctx, fullBlockId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load block: %w", err)
+	}
+	if !isTerminalAIAllowed(block, termCount) {
+		return nil, fmt.Errorf("terminal %s is not connected to AI", widgetId)
+	}
+
 	rpcClient := wshclient.GetBareRpcClient()
 	result, err := wshclient.TermGetScrollbackLinesCommand(
 		rpcClient,
@@ -439,12 +451,19 @@ func runTermSendInput(tabId string, parsed *TermSendInputToolInput) (*TermSendIn
 		return nil, err
 	}
 
+	termCount, err := countTerminalsInTab(resolveCtx, tabId)
+	if err != nil {
+		return nil, err
+	}
 	block, err := wstore.DBGet[*waveobj.Block](resolveCtx, fullBlockId)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load block: %w", err)
 	}
 	if block == nil || block.Meta == nil {
 		return nil, fmt.Errorf("block %s not found", parsed.WidgetId)
+	}
+	if !isTerminalAIAllowed(block, termCount) {
+		return nil, fmt.Errorf("terminal %s is not connected to AI", parsed.WidgetId)
 	}
 	viewType, _ := block.Meta["view"].(string)
 	if viewType != "term" {

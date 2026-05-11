@@ -18,6 +18,42 @@ import (
 	"github.com/wavetermdev/waveterm/pkg/wstore"
 )
 
+func countTerminalsInTab(ctx context.Context, tabid string) (int, error) {
+	tabObj, err := wstore.DBMustGet[*waveobj.Tab](ctx, tabid)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, blockId := range tabObj.BlockIds {
+		block, err := wstore.DBGet[*waveobj.Block](ctx, blockId)
+		if err != nil || block == nil || block.Meta == nil {
+			continue
+		}
+		if viewType, _ := block.Meta["view"].(string); viewType == "term" {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func isTerminalAIAllowed(block *waveobj.Block, totalTermCount int) bool {
+	if block == nil || block.Meta == nil {
+		return false
+	}
+	viewType, _ := block.Meta["view"].(string)
+	if viewType != "term" {
+		return true
+	}
+	if totalTermCount <= 1 {
+		return true
+	}
+	aiAccess, ok := block.Meta["term:aiaccess"].(bool)
+	if !ok {
+		return true
+	}
+	return aiAccess
+}
+
 func makeTerminalBlockDesc(block *waveobj.Block) string {
 	connection, hasConnection := block.Meta["connection"].(string)
 	cwd, hasCwd := block.Meta["cmd:cwd"].(string)
@@ -133,12 +169,26 @@ func GenerateTabStateAndTools(ctx context.Context, tabid string, widgetAccess bo
 			return "", nil, fmt.Errorf("error getting tab: %v", err)
 		}
 
+		// First pass: load all blocks and count terminals
+		var allBlocks []*waveobj.Block
+		termCount := 0
 		for _, blockId := range tabObj.BlockIds {
 			block, err := wstore.DBGet[*waveobj.Block](ctx, blockId)
-			if err != nil {
+			if err != nil || block == nil {
 				continue
 			}
-			blocks = append(blocks, block)
+			allBlocks = append(allBlocks, block)
+			if block.Meta != nil {
+				if viewType, _ := block.Meta["view"].(string); viewType == "term" {
+					termCount++
+				}
+			}
+		}
+		// Second pass: filter out terminals disconnected from AI
+		for _, block := range allBlocks {
+			if isTerminalAIAllowed(block, termCount) {
+				blocks = append(blocks, block)
+			}
 		}
 	}
 	tabState := GenerateCurrentTabStatePrompt(blocks, widgetAccess)

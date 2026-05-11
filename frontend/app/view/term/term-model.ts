@@ -10,7 +10,7 @@ import { waveEventSubscribeSingle } from "@/app/store/wps";
 import { RpcApi } from "@/app/store/wshclientapi";
 import { makeFeBlockRouteId } from "@/app/store/wshrouter";
 import { DefaultRouter, TabRpcClient } from "@/app/store/wshrpcutil";
-import { TermClaudeIcon, TerminalView } from "@/app/view/term/term";
+import { TerminalView } from "@/app/view/term/term";
 import { TermWshClient } from "@/app/view/term/term-wsh";
 import { VDomModel } from "@/app/view/vdom/vdom-model";
 import { WorkspaceLayoutModel } from "@/app/workspace/workspace-layout-model";
@@ -38,7 +38,6 @@ import { isMacOS, isWindows } from "@/util/platformutil";
 import { boundNumber, fireAndForget, stringToBase64 } from "@/util/util";
 import * as jotai from "jotai";
 import * as React from "react";
-import { getBlockingCommand } from "./shellblocking";
 import { computeTheme, DefaultTermTheme, isLikelyOnSameHost, trimTerminalSelection } from "./termutil";
 import { TermWrap, WebGLSupported } from "./termwrap";
 
@@ -286,9 +285,9 @@ export class TermViewModel implements ViewModel {
 
             const isAIPanelOpen = get(WorkspaceLayoutModel.getInstance().panelVisibleAtom);
             if (isAIPanelOpen) {
-                const shellIntegrationButton = this.getShellIntegrationIconButton(get);
-                if (shellIntegrationButton) {
-                    rtn.push(shellIntegrationButton);
+                const aiAccessButton = this.getAIAccessIconButton(get);
+                if (aiAccessButton) {
+                    rtn.push(aiAccessButton);
                 }
             }
 
@@ -398,54 +397,82 @@ export class TermViewModel implements ViewModel {
         });
     }
 
-    getShellIntegrationIconButton(get: jotai.Getter): IconButtonDecl | null {
-        if (!this.termRef.current?.shellIntegrationStatusAtom) {
-            return null;
-        }
-        const shellIntegrationStatus = get(this.termRef.current.shellIntegrationStatusAtom);
-        const claudeCodeActive = get(this.termRef.current.claudeCodeActiveAtom);
-        const icon = claudeCodeActive ? React.createElement(TermClaudeIcon) : "sparkles";
-        if (shellIntegrationStatus == null) {
-            return {
-                elemtype: "iconbutton",
-                icon,
-                className: "text-muted",
-                title: "No shell integration — Wave AI unable to run commands.",
-                noAction: true,
-            };
-        }
-        if (shellIntegrationStatus === "ready") {
-            return {
-                elemtype: "iconbutton",
-                icon,
-                className: "text-accent",
-                title: "Shell ready — Wave AI can run commands in this terminal.",
-                noAction: true,
-            };
-        }
-        if (shellIntegrationStatus === "running-command") {
-            let title = claudeCodeActive
-                ? "Claude Code Detected"
-                : "Shell busy — Wave AI unable to run commands while another command is running.";
+    getAIAccessIconButton(get: jotai.Getter): IconButtonDecl | null {
+        const blockData = get(this.blockAtom);
+        const tabData = get(this.tabModel.tabAtom);
+        const blockIds = tabData?.blockids ?? [];
 
-            if (this.termRef.current) {
-                const inAltBuffer = this.termRef.current.terminal?.buffer?.active?.type === "alternate";
-                const lastCommand = get(this.termRef.current.lastCommandAtom);
-                const blockingCmd = getBlockingCommand(lastCommand, inAltBuffer);
-                if (blockingCmd) {
-                    title = `Wave AI integration disabled while you're inside ${blockingCmd}.`;
+        let termCount = 0;
+        let connectedCount = 0;
+        for (const bid of blockIds) {
+            const bAtom = WOS.getWaveObjectAtom<Block>(WOS.makeORef("block", bid));
+            const bData = get(bAtom);
+            if (bData?.meta?.["view"] === "term") {
+                termCount++;
+                const aiAccess = bData.meta["term:aiaccess"];
+                if (aiAccess !== false) {
+                    connectedCount++;
                 }
             }
+        }
 
+        if (termCount === 0) {
+            return null;
+        }
+
+        const aiAccessMeta = blockData?.meta?.["term:aiaccess"];
+        const isConnected = aiAccessMeta !== false;
+        const isAIBusy = get(WaveAIModel.getInstance().isAIStreaming);
+
+        if (termCount <= 1) {
             return {
                 elemtype: "iconbutton",
-                icon,
-                className: "text-warning",
-                title: title,
+                icon: "sparkles",
+                className: "text-accent",
+                title: "AI always connected when only one terminal",
                 noAction: true,
             };
         }
-        return null;
+
+        if (isAIBusy) {
+            return {
+                elemtype: "iconbutton",
+                icon: "sparkles",
+                className: isConnected ? "text-accent" : "text-muted",
+                title: isConnected
+                    ? "AI connected to this terminal (cannot disconnect while AI is running)"
+                    : "AI disconnected from this terminal (cannot connect while AI is running)",
+                noAction: true,
+            };
+        }
+
+        if (isConnected && connectedCount <= 1) {
+            return {
+                elemtype: "iconbutton",
+                icon: "sparkles",
+                className: "text-accent",
+                title: "AI connected — at least one terminal must stay connected",
+                noAction: true,
+            };
+        }
+
+        const title = isConnected
+            ? "AI connected to this terminal (click to disconnect)"
+            : "AI disconnected from this terminal (click to connect)";
+
+        return {
+            elemtype: "iconbutton",
+            icon: "sparkles",
+            className: isConnected ? "text-accent" : "text-muted",
+            title,
+            click: () => {
+                const newValue = !isConnected;
+                RpcApi.SetMetaCommand(TabRpcClient, {
+                    oref: WOS.makeORef("block", this.blockId),
+                    meta: { "term:aiaccess": newValue },
+                });
+            },
+        };
     }
 
     getWebGlIconButton(get: jotai.Getter): IconButtonDecl | null {

@@ -1017,6 +1017,7 @@ declare global {
         "term:macoptionismeta"?: boolean;
         "term:cursor"?: string;
         "term:cursorblink"?: boolean;
+        "term:aiaccess"?: boolean;
         "term:conndebug"?: string;
         "term:bellsound"?: boolean;
         "term:bellindicator"?: boolean;
